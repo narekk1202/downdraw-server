@@ -15,6 +15,20 @@ app.get('/', async c => {
 	}
 });
 
+app.get('/:id', async c => {
+	const { id } = c.req.param();
+	try {
+		const room = await roomsService.getById(id);
+		if (!room) {
+			return c.json({ error: 'Room not found' }, 404);
+		}
+		return c.json(room[0]);
+	} catch (error) {
+		console.error('Error fetching room:', error);
+		return c.json({ error: 'Failed to fetch room' }, 500);
+	}
+});
+
 app.post('/create', zValidator('json', roomValidation), async c => {
 	const { name, creatorId } = c.req.valid('json');
 	try {
