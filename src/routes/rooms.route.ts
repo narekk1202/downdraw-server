@@ -40,4 +40,15 @@ app.post('/create', zValidator('json', roomValidation), async c => {
 	}
 });
 
+app.delete('/:id', async c => {
+	const { id } = c.req.param();
+	try {
+		await roomsService.deleteRoom(id);
+		return c.json(201);
+	} catch (error) {
+		console.error('Error deleting room:', error);
+		return c.json({ error: 'Failed to delete room' }, 500);
+	}
+});
+
 export default app;
