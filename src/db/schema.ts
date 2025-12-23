@@ -13,6 +13,7 @@ export const rooms = pgTable('rooms', {
 		.default(sql`gen_random_uuid()`)
 		.primaryKey(),
 	name: text('name').notNull(),
+	creatorId: uuid('creator_id').notNull(),
 	createdAt: timestamp('created_at').notNull().defaultNow(),
 	updatedAt: timestamp('updated_at').notNull().defaultNow(),
 });

@@ -16,9 +16,9 @@ app.get('/', async c => {
 });
 
 app.post('/create', zValidator('json', roomValidation), async c => {
-	const { name } = c.req.valid('json');
+	const { name, creatorId } = c.req.valid('json');
 	try {
-		const newRoom = await roomsService.createRoom(name);
+		const newRoom = await roomsService.createRoom(name, creatorId);
 		return c.json({ newRoom });
 	} catch (error) {
 		console.error('Error creating room:', error);

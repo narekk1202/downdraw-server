@@ -6,8 +6,8 @@ class RoomsService {
 		return await db.select().from(rooms);
 	}
 
-	public async createRoom(name: string) {
-		return await db.insert(rooms).values({ name }).returning();
+	public async createRoom(name: string, creatorId: string) {
+		return await db.insert(rooms).values({ name, creatorId }).returning();
 	}
 }
 
