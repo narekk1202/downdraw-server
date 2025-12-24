@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { roomsService } from '../services/rooms.service';
 import { roomValidation } from '../types/validations/room.validations';
 
-const app = new Hono();
+const app = new Hono<{ Bindings: CloudflareBindings }>();
 
 app.get('/', async c => {
 	try {
@@ -19,7 +19,7 @@ app.get('/:id', async c => {
 	const { id } = c.req.param();
 	try {
 		const room = await roomsService.getById(id);
-		if (!room) {
+		if (!room || room.length === 0) {
 			return c.json({ error: 'Room not found' }, 404);
 		}
 		return c.json(room[0]);
@@ -49,6 +49,19 @@ app.delete('/:id', async c => {
 		console.error('Error deleting room:', error);
 		return c.json({ error: 'Failed to delete room' }, 500);
 	}
+});
+
+app.get('/:id/ws', async c => {
+	if (c.req.header('upgrade') !== 'websocket') {
+		return c.text('Expected Upgrade: websocket', 426);
+	}
+
+	const { id: roomId } = c.req.param()
+
+	const id = c.env.WEBHOOK_RECEIVER.idFromName(roomId);
+	const stub = c.env.WEBHOOK_RECEIVER.get(id);
+	
+	return stub.fetch(c.req.raw);
 });
 
 export default app;
