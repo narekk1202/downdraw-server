@@ -44,6 +44,11 @@ app.delete('/:id', async c => {
 	const { id } = c.req.param();
 	try {
 		await roomsService.deleteRoom(id);
+
+		const doId = c.env.WEBHOOK_RECEIVER.idFromName(id);
+		const stub = c.env.WEBHOOK_RECEIVER.get(doId);
+		await stub.fetch(new Request('http://localhost', { method: 'DELETE' }));
+
 		return c.json(201);
 	} catch (error) {
 		console.error('Error deleting room:', error);
@@ -56,11 +61,11 @@ app.get('/:id/ws', async c => {
 		return c.text('Expected Upgrade: websocket', 426);
 	}
 
-	const { id: roomId } = c.req.param()
+	const { id: roomId } = c.req.param();
 
 	const id = c.env.WEBHOOK_RECEIVER.idFromName(roomId);
 	const stub = c.env.WEBHOOK_RECEIVER.get(id);
-	
+
 	return stub.fetch(c.req.raw);
 });
 

@@ -11,6 +11,11 @@ export class WebhookReceiver extends DurableObject<CloudflareBindings> {
 	}
 
 	async fetch(req: Request) {
+		if (req.method === 'DELETE') {
+			this.broadcastRoomDeleted();
+			return new Response(null, { status: 204 });
+		}
+
 		const url = new URL(req.url);
 		const userId = url.searchParams.get('userId');
 		const userName = url.searchParams.get('userName');
@@ -46,6 +51,20 @@ export class WebhookReceiver extends DurableObject<CloudflareBindings> {
 			if (ws === excludeWs) continue;
 			try {
 				ws.send(message);
+			} catch (e) {
+				console.error('Error sending message to websocket', e);
+			}
+		}
+	}
+
+	broadcastRoomDeleted() {
+		const websockets = this.ctx.getWebSockets();
+		const message = JSON.stringify({ type: 'room_deleted' });
+
+		for (const ws of websockets) {
+			try {
+				ws.send(message);
+				ws.close(1000, 'Room deleted');
 			} catch (e) {
 				console.error('Error sending message to websocket', e);
 			}
