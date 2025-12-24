@@ -7,7 +7,7 @@
 	"migrations": [
 		{
 			"tag": "v1",
-			"new_classes": ["WebhookReceiver"]
+			"new_sqlite_classes": ["WebhookReceiver"]
 		}
 	],
 	"durable_objects": {
