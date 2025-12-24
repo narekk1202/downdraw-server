@@ -40,19 +40,94 @@ interface ClearCanvasMessage extends BaseMessage {
 
 type IncomingMessage = DrawingMessage | CursorMessage | ClearCanvasMessage;
 
+interface CanvasLine {
+	points: Array<{ x: number; y: number }>;
+	brushColor: string;
+	brushRadius: number;
+}
+
+interface CanvasData {
+	lines: CanvasLine[];
+	width: number;
+	height: number;
+}
+
 const DRAWING_STORAGE_KEY = 'drawing_data';
 const SAVE_DEBOUNCE_MS = 1000;
 
 export class WebhookReceiver extends DurableObject<CloudflareBindings> {
-	private drawingState: string = '';
+	private drawingState: CanvasData = { lines: [], width: 1200, height: 800 };
 	private saveTimer: number | null = null;
 
 	constructor(ctx: DurableObjectState, env: CloudflareBindings) {
 		super(ctx, env);
 		this.ctx.blockConcurrencyWhile(async () => {
 			const stored = await this.ctx.storage.get<string>(DRAWING_STORAGE_KEY);
-			this.drawingState = stored || '';
+			if (stored) {
+				try {
+					this.drawingState = JSON.parse(stored);
+				} catch {
+					this.drawingState = { lines: [], width: 1200, height: 800 };
+				}
+			}
 		});
+	}
+
+	private parseCanvasData(data: string): CanvasData | null {
+		try {
+			const parsed = JSON.parse(data);
+			if (parsed && Array.isArray(parsed.lines)) {
+				return parsed as CanvasData;
+			}
+		} catch {}
+		return null;
+	}
+
+	private mergeDrawingData(incomingData: CanvasData): void {
+		const existingLines = this.drawingState.lines;
+		const incomingLines = incomingData.lines;
+
+		const newLines: CanvasLine[] = [];
+
+		for (const incomingLine of incomingLines) {
+			const exists = existingLines.some(
+				existingLine =>
+					existingLine.points.length === incomingLine.points.length &&
+					existingLine.brushColor === incomingLine.brushColor &&
+					existingLine.brushRadius === incomingLine.brushRadius &&
+					existingLine.points.every(
+						(p, i) =>
+							p.x === incomingLine.points[i]?.x &&
+							p.y === incomingLine.points[i]?.y
+					)
+			);
+
+			if (!exists) {
+				newLines.push(incomingLine);
+			}
+		}
+
+		const isUndo =
+			incomingLines.length < existingLines.length &&
+			incomingLines.every(incomingLine =>
+				existingLines.some(
+					existingLine =>
+						existingLine.points.length === incomingLine.points.length &&
+						existingLine.brushColor === incomingLine.brushColor &&
+						existingLine.brushRadius === incomingLine.brushRadius &&
+						existingLine.points.every(
+							(p, i) =>
+								p.x === incomingLine.points[i]?.x &&
+								p.y === incomingLine.points[i]?.y
+						)
+				)
+			);
+
+		if (isUndo) {
+			this.drawingState = incomingData;
+		} else if (newLines.length > 0) {
+			this.drawingState.lines = [...existingLines, ...newLines];
+		}
 	}
 
 	async fetch(req: Request): Promise<Response> {
@@ -79,9 +154,12 @@ export class WebhookReceiver extends DurableObject<CloudflareBindings> {
 
 		this.ctx.acceptWebSocket(server);
 
-		if (this.drawingState) {
+		if (this.drawingState.lines.length > 0) {
 			server.send(
-				JSON.stringify({ type: 'init_drawing', data: this.drawingState })
+				JSON.stringify({
+					type: 'init_drawing',
+					data: JSON.stringify(this.drawingState),
+				})
 			);
 		}
 
@@ -101,15 +179,22 @@ export class WebhookReceiver extends DurableObject<CloudflareBindings> {
 
 			switch (parsed.type) {
 				case 'drawing':
-					this.drawingState = parsed.data;
+					const incomingData = this.parseCanvasData(parsed.data);
+					if (incomingData) {
+						this.mergeDrawingData(incomingData);
 
-					this.broadcast(message, ws);
+						const mergedStateMessage = JSON.stringify({
+							type: 'drawing',
+							data: JSON.stringify(this.drawingState),
+						});
+						this.broadcast(mergedStateMessage, ws);
 
-					this.scheduleSave();
+						this.scheduleSave();
+					}
 					break;
 
 				case 'clear_canvas':
-					this.drawingState = '';
+					this.drawingState = { lines: [], width: 1200, height: 800 };
 					this.broadcast(message, ws);
 					this.scheduleSave();
 					break;
@@ -145,7 +230,10 @@ export class WebhookReceiver extends DurableObject<CloudflareBindings> {
 		if (this.saveTimer) return;
 
 		this.saveTimer = setTimeout(() => {
-			this.ctx.storage.put(DRAWING_STORAGE_KEY, this.drawingState);
+			this.ctx.storage.put(
+				DRAWING_STORAGE_KEY,
+				JSON.stringify(this.drawingState)
+			);
 			this.saveTimer = null;
 		}, SAVE_DEBOUNCE_MS) as unknown as number;
 	}
@@ -155,8 +243,7 @@ export class WebhookReceiver extends DurableObject<CloudflareBindings> {
 			if (ws === excludeWs) continue;
 			try {
 				ws.send(message);
-			} catch (e) {
-			}
+			} catch (e) {}
 		}
 	}
 
@@ -164,8 +251,8 @@ export class WebhookReceiver extends DurableObject<CloudflareBindings> {
 		const websockets = this.ctx.getWebSockets();
 
 		const users = websockets
-			.filter((ws) => ws !== excludeWs)
-			.map((ws) => ws.deserializeAttachment() as User | null)
+			.filter(ws => ws !== excludeWs)
+			.map(ws => ws.deserializeAttachment() as User | null)
 			.filter((user): user is User => user !== null);
 
 		this.broadcast(JSON.stringify({ type: 'users', users }), excludeWs);
@@ -180,7 +267,7 @@ export class WebhookReceiver extends DurableObject<CloudflareBindings> {
 			} catch {}
 		}
 
-		this.drawingState = '';
+		this.drawingState = { lines: [], width: 1200, height: 800 };
 		if (this.saveTimer) {
 			clearTimeout(this.saveTimer);
 			this.saveTimer = null;
