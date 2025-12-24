@@ -1,4 +1,5 @@
 import { zValidator } from '@hono/zod-validator';
+import { neon } from '@neondatabase/serverless';
 import { drizzle, NeonHttpDatabase } from 'drizzle-orm/neon-http';
 import { Hono } from 'hono';
 import { roomsService } from '../services/rooms.service';
@@ -10,7 +11,8 @@ const app = new Hono<{
 }>();
 
 app.use('*', async (c, next) => {
-	const db = drizzle(c.env.DATABASE_URL);
+	const sql = neon(c.env.DATABASE_URL);
+	const db = drizzle(sql);
 	c.set('db', db);
 	await next();
 });
