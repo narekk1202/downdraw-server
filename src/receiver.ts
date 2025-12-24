@@ -41,10 +41,18 @@ interface ClearCanvasMessage extends BaseMessage {
 type IncomingMessage = DrawingMessage | CursorMessage | ClearCanvasMessage;
 
 const DRAWING_STORAGE_KEY = 'drawing_data';
+const SAVE_DEBOUNCE_MS = 1000;
 
 export class WebhookReceiver extends DurableObject<CloudflareBindings> {
+	private drawingState: string = '';
+	private saveTimer: number | null = null;
+
 	constructor(ctx: DurableObjectState, env: CloudflareBindings) {
 		super(ctx, env);
+		this.ctx.blockConcurrencyWhile(async () => {
+			const stored = await this.ctx.storage.get<string>(DRAWING_STORAGE_KEY);
+			this.drawingState = stored || '';
+		});
 	}
 
 	async fetch(req: Request): Promise<Response> {
@@ -54,6 +62,10 @@ export class WebhookReceiver extends DurableObject<CloudflareBindings> {
 			return this.handleRoomDeletion();
 		}
 
+		if (req.headers.get('Upgrade') !== 'websocket') {
+			return new Response('Expected Upgrade: websocket', { status: 426 });
+		}
+
 		const userId = url.searchParams.get('userId');
 		const userName = url.searchParams.get('userName');
 
@@ -61,17 +73,17 @@ export class WebhookReceiver extends DurableObject<CloudflareBindings> {
 			return new Response('Missing userId or userName', { status: 400 });
 		}
 
-		if (req.headers.get('Upgrade') !== 'websocket') {
-			return new Response('Expected Upgrade: websocket', { status: 426 });
-		}
-
 		const { 0: client, 1: server } = new WebSocketPair();
-
-		this.ctx.acceptWebSocket(server);
 
 		server.serializeAttachment({ id: userId, name: userName } as User);
 
-		await this.sendInitialState(server);
+		this.ctx.acceptWebSocket(server);
+
+		if (this.drawingState) {
+			server.send(
+				JSON.stringify({ type: 'init_drawing', data: this.drawingState })
+			);
+		}
 
 		this.broadcastUserList();
 
@@ -79,50 +91,6 @@ export class WebhookReceiver extends DurableObject<CloudflareBindings> {
 			status: 101,
 			webSocket: client,
 		});
-	}
-
-	private async sendInitialState(ws: WebSocket) {
-		const existingDrawing = await this.ctx.storage.get<string>(
-			DRAWING_STORAGE_KEY
-		);
-		if (existingDrawing) {
-			ws.send(JSON.stringify({ type: 'init_drawing', data: existingDrawing }));
-		}
-	}
-
-	private broadcast(message: string, excludeWs?: WebSocket) {
-		for (const ws of this.ctx.getWebSockets()) {
-			if (ws === excludeWs) continue;
-			try {
-				ws.send(message);
-			} catch (e) {
-				console.error('Error broadcasting message:', e);
-			}
-		}
-	}
-
-	private broadcastUserList(excludeWs?: WebSocket) {
-		const websockets = this.ctx.getWebSockets();
-
-		const users = websockets
-			.filter(ws => ws !== excludeWs)
-			.map(ws => ws.deserializeAttachment() as User | null)
-			.filter((user): user is User => user !== null);
-
-		this.broadcast(JSON.stringify({ type: 'users', users }), excludeWs);
-	}
-
-	private async handleRoomDeletion(): Promise<Response> {
-		this.broadcast(JSON.stringify({ type: 'room_deleted' }));
-
-		for (const ws of this.ctx.getWebSockets()) {
-			try {
-				ws.close(1000, 'Room deleted');
-			} catch {}
-		}
-
-		await this.ctx.storage.delete(DRAWING_STORAGE_KEY);
-		return new Response(null, { status: 204 });
 	}
 
 	async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
@@ -133,13 +101,17 @@ export class WebhookReceiver extends DurableObject<CloudflareBindings> {
 
 			switch (parsed.type) {
 				case 'drawing':
-					await this.ctx.storage.put(DRAWING_STORAGE_KEY, parsed.data);
+					this.drawingState = parsed.data;
+
 					this.broadcast(message, ws);
+
+					this.scheduleSave();
 					break;
 
 				case 'clear_canvas':
-					await this.ctx.storage.delete(DRAWING_STORAGE_KEY);
+					this.drawingState = '';
 					this.broadcast(message, ws);
+					this.scheduleSave();
 					break;
 
 				case 'cursor':
@@ -155,11 +127,6 @@ export class WebhookReceiver extends DurableObject<CloudflareBindings> {
 		}
 	}
 
-	webSocketError(ws: WebSocket, error: unknown) {
-		console.error('WebSocket Error:', error);
-		this.broadcastUserList(ws);
-	}
-
 	webSocketClose(
 		ws: WebSocket,
 		code: number,
@@ -167,5 +134,59 @@ export class WebhookReceiver extends DurableObject<CloudflareBindings> {
 		wasClean: boolean
 	) {
 		this.broadcastUserList(ws);
+	}
+
+	webSocketError(ws: WebSocket, error: unknown) {
+		console.error('WebSocket Error:', error);
+		this.broadcastUserList(ws);
+	}
+
+	private scheduleSave() {
+		if (this.saveTimer) return;
+
+		this.saveTimer = setTimeout(() => {
+			this.ctx.storage.put(DRAWING_STORAGE_KEY, this.drawingState);
+			this.saveTimer = null;
+		}, SAVE_DEBOUNCE_MS) as unknown as number;
+	}
+
+	private broadcast(message: string, excludeWs?: WebSocket) {
+		for (const ws of this.ctx.getWebSockets()) {
+			if (ws === excludeWs) continue;
+			try {
+				ws.send(message);
+			} catch (e) {
+			}
+		}
+	}
+
+	private broadcastUserList(excludeWs?: WebSocket) {
+		const websockets = this.ctx.getWebSockets();
+
+		const users = websockets
+			.filter((ws) => ws !== excludeWs)
+			.map((ws) => ws.deserializeAttachment() as User | null)
+			.filter((user): user is User => user !== null);
+
+		this.broadcast(JSON.stringify({ type: 'users', users }), excludeWs);
+	}
+
+	private async handleRoomDeletion(): Promise<Response> {
+		this.broadcast(JSON.stringify({ type: 'room_deleted' }));
+
+		for (const ws of this.ctx.getWebSockets()) {
+			try {
+				ws.close(1000, 'Room deleted');
+			} catch {}
+		}
+
+		this.drawingState = '';
+		if (this.saveTimer) {
+			clearTimeout(this.saveTimer);
+			this.saveTimer = null;
+		}
+		await this.ctx.storage.delete(DRAWING_STORAGE_KEY);
+
+		return new Response(null, { status: 204 });
 	}
 }
