@@ -11,7 +11,7 @@ const app = new Hono<{
 }>();
 
 app.use('*', async (c, next) => {
-	const sql = neon(c.env.DATABASE_URL);
+	const sql = neon(process.env.DATABASE_URL);
 	const db = drizzle(sql);
 	c.set('db', db);
 	await next();
