@@ -4,6 +4,12 @@
 	"main": "src/index.ts",
 	"compatibility_date": "2025-12-18",
 	"compatibility_flags": ["nodejs_compat"],
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_classes": ["WebhookReceiver"]
+		}
+	],
 	"durable_objects": {
 		"bindings": [
 			{

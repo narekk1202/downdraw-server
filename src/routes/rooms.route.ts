@@ -1,13 +1,23 @@
 import { zValidator } from '@hono/zod-validator';
+import { drizzle, NeonHttpDatabase } from 'drizzle-orm/neon-http';
 import { Hono } from 'hono';
 import { roomsService } from '../services/rooms.service';
 import { roomValidation } from '../types/validations/room.validations';
 
-const app = new Hono<{ Bindings: CloudflareBindings }>();
+const app = new Hono<{
+	Bindings: CloudflareBindings;
+	Variables: { db: NeonHttpDatabase };
+}>();
+
+app.use('*', async (c, next) => {
+	const db = drizzle(c.env.DATABASE_URL);
+	c.set('db', db);
+	await next();
+});
 
 app.get('/', async c => {
 	try {
-		const rooms = await roomsService.getAll();
+		const rooms = await roomsService.getAll(c.get('db'));
 		return c.json({ rooms });
 	} catch (error) {
 		console.error('Error fetching rooms:', error);
@@ -18,7 +28,7 @@ app.get('/', async c => {
 app.get('/:id', async c => {
 	const { id } = c.req.param();
 	try {
-		const room = await roomsService.getById(id);
+		const room = await roomsService.getById(c.get('db'), id);
 		if (!room || room.length === 0) {
 			return c.json({ error: 'Room not found' }, 404);
 		}
@@ -32,7 +42,7 @@ app.get('/:id', async c => {
 app.post('/create', zValidator('json', roomValidation), async c => {
 	const { name, creatorId } = c.req.valid('json');
 	try {
-		const newRoom = await roomsService.createRoom(name, creatorId);
+		const newRoom = await roomsService.createRoom(c.get('db'), name, creatorId);
 		return c.json(newRoom[0]);
 	} catch (error) {
 		console.error('Error creating room:', error);
@@ -43,7 +53,7 @@ app.post('/create', zValidator('json', roomValidation), async c => {
 app.delete('/:id', async c => {
 	const { id } = c.req.param();
 	try {
-		await roomsService.deleteRoom(id);
+		await roomsService.deleteRoom(c.get('db'), id);
 
 		const doId = c.env.WEBHOOK_RECEIVER.idFromName(id);
 		const stub = c.env.WEBHOOK_RECEIVER.get(doId);

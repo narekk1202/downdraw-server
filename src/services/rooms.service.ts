@@ -1,21 +1,25 @@
 import { eq } from 'drizzle-orm';
-import { db } from '..';
+import { NeonHttpDatabase } from 'drizzle-orm/neon-http';
 import { rooms } from '../db/schema';
 
 class RoomsService {
-	public async getAll() {
+	public async getAll(db: NeonHttpDatabase) {
 		return await db.select().from(rooms);
 	}
 
-	public async getById(id: string) {
+	public async getById(db: NeonHttpDatabase, id: string) {
 		return await db.select().from(rooms).where(eq(rooms.id, id));
 	}
 
-	public async createRoom(name: string, creatorId: string) {
+	public async createRoom(
+		db: NeonHttpDatabase,
+		name: string,
+		creatorId: string
+	) {
 		return await db.insert(rooms).values({ name, creatorId }).returning();
 	}
 
-	public async deleteRoom(id: string) {
+	public async deleteRoom(db: NeonHttpDatabase, id: string) {
 		return await db.delete(rooms).where(eq(rooms.id, id));
 	}
 }
